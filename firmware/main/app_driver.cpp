@@ -5,7 +5,6 @@
 #include <app_priv.h>
 #include <common_macros.h>
 
-
 extern "C" {
 #include "dm631.h"
 }
@@ -14,18 +13,42 @@ using namespace chip::app::Clusters;
 using namespace esp_matter;
 
 static const char *TAG = "app_driver";
-extern uint16_t light_endpoint_id;
 
-// ---------- retained light state ----------
+// ---------- per-zone light state ----------
 
-static bool     s_power      = DEFAULT_POWER;
-static float    s_brightness = DEFAULT_BRIGHTNESS / (float)MATTER_BRIGHTNESS;
-static float    s_hue        = 0.0f;   // degrees 0–360
-static float    s_saturation = 1.0f;   // 0–1
-static uint16_t s_x          = 0;      // CIE 1931 X (0–65535)
-static uint16_t s_y          = 0;      // CIE 1931 Y (0–65535)
-static uint32_t s_temp_k     = 4000;   // Kelvin
-static uint8_t  s_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
+struct zone_state_t {
+    bool     power;
+    float    brightness;  // 0–1
+    float    hue;         // degrees 0–360
+    float    saturation;  // 0–1
+    uint16_t x;           // CIE 1931 X (0–65535)
+    uint16_t y;           // CIE 1931 Y (0–65535)
+    uint32_t temp_k;      // Kelvin
+    uint8_t  color_mode;
+};
+
+static zone_state_t s_zone_state[NUM_LIGHT_ZONES];
+
+// endpoint_id → zone index mapping (registered from app_main)
+static uint16_t s_endpoint_ids[NUM_LIGHT_ZONES];
+static bool     s_endpoints_registered = false;
+
+void app_driver_register_endpoint(uint8_t zone, uint16_t endpoint_id)
+{
+    if (zone < NUM_LIGHT_ZONES) {
+        s_endpoint_ids[zone] = endpoint_id;
+        ESP_LOGI(TAG, "zone %d → endpoint %d", zone, endpoint_id);
+    }
+    s_endpoints_registered = true;
+}
+
+static int8_t endpoint_to_zone(uint16_t endpoint_id)
+{
+    for (int i = 0; i < NUM_LIGHT_ZONES; i++) {
+        if (s_endpoint_ids[i] == endpoint_id) return (int8_t)i;
+    }
+    return -1;  // not one of our light endpoints
+}
 
 // ---------- color math ----------
 
@@ -90,23 +113,24 @@ static void xy_to_rgb(uint16_t cx, uint16_t cy, float *r, float *g, float *b)
     *r = lr; *g = lg; *b = lb;
 }
 
-// Compute RGB from current state and push to all 10 DM631 zones.
-static void apply_to_leds(void)
+// Compute RGB from the given zone's state and push it to the DM631 hardware.
+static void apply_zone_to_leds(uint8_t zone)
 {
+    zone_state_t &z = s_zone_state[zone];
     float r = 0.0f, g = 0.0f, b = 0.0f;
 
-    ESP_LOGI(TAG, "apply_to_leds: power=%d mode=%d bri=%.3f hue=%.1f sat=%.3f",
-             s_power, s_color_mode, s_brightness, s_hue, s_saturation);
+    ESP_LOGD(TAG, "zone %d: power=%d mode=%d bri=%.3f hue=%.1f sat=%.3f",
+             zone, z.power, z.color_mode, z.brightness, z.hue, z.saturation);
 
-    if (s_power) {
-        if (s_color_mode == (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation) {
-            hsv_to_rgb(s_hue, s_saturation, s_brightness, &r, &g, &b);
-        } else if (s_color_mode == (uint8_t)ColorControl::ColorMode::kColorTemperature) {
-            kelvin_to_rgb(s_temp_k, &r, &g, &b);
-            r *= s_brightness; g *= s_brightness; b *= s_brightness;
+    if (z.power) {
+        if (z.color_mode == (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation) {
+            hsv_to_rgb(z.hue, z.saturation, z.brightness, &r, &g, &b);
+        } else if (z.color_mode == (uint8_t)ColorControl::ColorMode::kColorTemperature) {
+            kelvin_to_rgb(z.temp_k, &r, &g, &b);
+            r *= z.brightness; g *= z.brightness; b *= z.brightness;
         } else {
-            xy_to_rgb(s_x, s_y, &r, &g, &b);
-            r *= s_brightness; g *= s_brightness; b *= s_brightness;
+            xy_to_rgb(z.x, z.y, &r, &g, &b);
+            r *= z.brightness; g *= z.brightness; b *= z.brightness;
         }
     }
 
@@ -115,9 +139,11 @@ static void apply_to_leds(void)
         .g = (uint16_t)(g * 4095.0f),
         .b = (uint16_t)(b * 4095.0f),
     };
-    ESP_LOGI(TAG, "dm631 → R=%u G=%u B=%u", color.r, color.g, color.b);
-    dm631_set_all(color);
-    dm631_update();
+
+    ESP_LOGD(TAG, "zone %d → DM631 R=%u G=%u B=%u", zone, color.r, color.g, color.b);
+
+    dm631_set_zone(zone, color);
+    dm631_update();   // sends the full 384-bit frame for all zones atomically
 }
 
 // ---------- Matter attribute callback ----------
@@ -126,43 +152,43 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle,
                                       uint16_t endpoint_id, uint32_t cluster_id,
                                       uint32_t attribute_id, esp_matter_attr_val_t *val)
 {
-    ESP_LOGI(TAG, "attr_update: ep=%u cluster=0x%04lX attr=0x%04lX",
-             endpoint_id, (unsigned long)cluster_id, (unsigned long)attribute_id);
+    int8_t zone = endpoint_to_zone(endpoint_id);
+    if (zone < 0) return ESP_OK;   // not one of our light endpoints
 
-    if (endpoint_id != light_endpoint_id) return ESP_OK;
+    zone_state_t &z = s_zone_state[zone];
 
     if (cluster_id == OnOff::Id) {
         if (attribute_id == OnOff::Attributes::OnOff::Id) {
-            s_power = val->val.b;
-            apply_to_leds();
+            z.power = val->val.b;
+            apply_zone_to_leds((uint8_t)zone);
         }
     } else if (cluster_id == LevelControl::Id) {
         if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
-            s_brightness = REMAP_TO_RANGE(val->val.u8, MATTER_BRIGHTNESS, STANDARD_BRIGHTNESS) / 100.0f;
-            apply_to_leds();
+            z.brightness = REMAP_TO_RANGE(val->val.u8, MATTER_BRIGHTNESS, STANDARD_BRIGHTNESS) / 100.0f;
+            apply_zone_to_leds((uint8_t)zone);
         }
     } else if (cluster_id == ColorControl::Id) {
         if (attribute_id == ColorControl::Attributes::ColorMode::Id) {
-            s_color_mode = val->val.u8;
-            // No apply_to_leds — mode change alone doesn't alter output until
-            // the corresponding color attribute arrives in the same transaction.
+            z.color_mode = val->val.u8;
+            // No apply — mode change alone doesn't alter output until the
+            // corresponding colour attribute arrives in the same transaction.
         } else if (attribute_id == ColorControl::Attributes::CurrentHue::Id) {
-            s_hue = REMAP_TO_RANGE(val->val.u8, MATTER_HUE, STANDARD_HUE);
-            apply_to_leds();
+            z.hue = REMAP_TO_RANGE(val->val.u8, MATTER_HUE, STANDARD_HUE);
+            apply_zone_to_leds((uint8_t)zone);
         } else if (attribute_id == ColorControl::Attributes::CurrentSaturation::Id) {
-            s_saturation = REMAP_TO_RANGE(val->val.u8, MATTER_SATURATION, STANDARD_SATURATION) / 100.0f;
-            apply_to_leds();
+            z.saturation = REMAP_TO_RANGE(val->val.u8, MATTER_SATURATION, STANDARD_SATURATION) / 100.0f;
+            apply_zone_to_leds((uint8_t)zone);
         } else if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id) {
             if (val->val.u16 > 0) {
-                s_temp_k = 1000000UL / val->val.u16;
+                z.temp_k = 1000000UL / val->val.u16;
             }
-            apply_to_leds();
+            apply_zone_to_leds((uint8_t)zone);
         } else if (attribute_id == ColorControl::Attributes::CurrentX::Id) {
-            s_x = val->val.u16;
-            apply_to_leds();
+            z.x = val->val.u16;
+            apply_zone_to_leds((uint8_t)zone);
         } else if (attribute_id == ColorControl::Attributes::CurrentY::Id) {
-            s_y = val->val.u16;
-            apply_to_leds();
+            z.y = val->val.u16;
+            apply_zone_to_leds((uint8_t)zone);
         }
     }
     return ESP_OK;
@@ -171,47 +197,51 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle,
 // Read all light attributes from NVS-restored state and push to hardware at boot.
 esp_err_t app_driver_light_set_defaults(uint16_t endpoint_id)
 {
+    int8_t zone = endpoint_to_zone(endpoint_id);
+    if (zone < 0) return ESP_ERR_NOT_FOUND;
+
+    zone_state_t &z = s_zone_state[zone];
     esp_matter_attr_val_t val = esp_matter_invalid(NULL);
     attribute_t *attr;
 
     attr = attribute::get(endpoint_id, ColorControl::Id, ColorControl::Attributes::ColorMode::Id);
     attribute::get_val(attr, &val);
-    s_color_mode = val.val.u8;
+    z.color_mode = val.val.u8;
 
     attr = attribute::get(endpoint_id, LevelControl::Id, LevelControl::Attributes::CurrentLevel::Id);
     attribute::get_val(attr, &val);
-    s_brightness = REMAP_TO_RANGE(val.val.u8, MATTER_BRIGHTNESS, STANDARD_BRIGHTNESS) / 100.0f;
+    z.brightness = REMAP_TO_RANGE(val.val.u8, MATTER_BRIGHTNESS, STANDARD_BRIGHTNESS) / 100.0f;
 
-    if (s_color_mode == (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation) {
+    if (z.color_mode == (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation) {
         attr = attribute::get(endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentHue::Id);
         attribute::get_val(attr, &val);
-        s_hue = REMAP_TO_RANGE(val.val.u8, MATTER_HUE, STANDARD_HUE);
+        z.hue = REMAP_TO_RANGE(val.val.u8, MATTER_HUE, STANDARD_HUE);
 
         attr = attribute::get(endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentSaturation::Id);
         attribute::get_val(attr, &val);
-        s_saturation = REMAP_TO_RANGE(val.val.u8, MATTER_SATURATION, STANDARD_SATURATION) / 100.0f;
+        z.saturation = REMAP_TO_RANGE(val.val.u8, MATTER_SATURATION, STANDARD_SATURATION) / 100.0f;
 
-    } else if (s_color_mode == (uint8_t)ColorControl::ColorMode::kColorTemperature) {
+    } else if (z.color_mode == (uint8_t)ColorControl::ColorMode::kColorTemperature) {
         attr = attribute::get(endpoint_id, ColorControl::Id, ColorControl::Attributes::ColorTemperatureMireds::Id);
         attribute::get_val(attr, &val);
         if (val.val.u16 > 0) {
-            s_temp_k = 1000000UL / val.val.u16;
+            z.temp_k = 1000000UL / val.val.u16;
         }
     } else {
         attr = attribute::get(endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentX::Id);
         attribute::get_val(attr, &val);
-        s_x = val.val.u16;
+        z.x = val.val.u16;
 
         attr = attribute::get(endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentY::Id);
         attribute::get_val(attr, &val);
-        s_y = val.val.u16;
+        z.y = val.val.u16;
     }
 
     attr = attribute::get(endpoint_id, OnOff::Id, OnOff::Attributes::OnOff::Id);
     attribute::get_val(attr, &val);
-    s_power = val.val.b;
+    z.power = val.val.b;
 
-    apply_to_leds();
+    apply_zone_to_leds((uint8_t)zone);
     return ESP_OK;
 }
 
@@ -219,6 +249,20 @@ esp_err_t app_driver_light_set_defaults(uint16_t endpoint_id)
 
 app_driver_handle_t app_driver_light_init(void)
 {
+    // Initialise per-zone state with power-on defaults.
+    for (int i = 0; i < NUM_LIGHT_ZONES; i++) {
+        s_zone_state[i] = {
+            .power      = DEFAULT_POWER,
+            .brightness = DEFAULT_BRIGHTNESS / (float)MATTER_BRIGHTNESS,
+            .hue        = 0.0f,
+            .saturation = 1.0f,
+            .x          = 0,
+            .y          = 0,
+            .temp_k     = 4000,
+            .color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation,
+        };
+    }
+
     dm631_init();
     return (app_driver_handle_t)(uintptr_t)1;   // non-null sentinel; dm631 is a singleton
 }

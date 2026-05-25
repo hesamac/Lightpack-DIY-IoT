@@ -13,7 +13,10 @@
 #include <app/server/Server.h>
 
 static const char *TAG = "app_main";
-uint16_t light_endpoint_id = 0;
+
+// One endpoint ID per LED zone (zones 0–9).
+// Exported so app_driver.cpp can also reference them if needed.
+uint16_t light_endpoint_ids[NUM_LIGHT_ZONES];
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
@@ -58,7 +61,8 @@ static esp_err_t app_identification_cb(identification::callback_type_t type,
                                        uint16_t endpoint_id, uint8_t effect_id,
                                        uint8_t effect_variant, void *priv_data)
 {
-    ESP_LOGI(TAG, "Identify: type=%u effect=%u variant=%u", type, effect_id, effect_variant);
+    ESP_LOGI(TAG, "Identify: ep=%u type=%u effect=%u variant=%u",
+             endpoint_id, type, effect_id, effect_variant);
     return ESP_OK;
 }
 
@@ -72,6 +76,76 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type,
                                            endpoint_id, cluster_id, attribute_id, val);
     }
     return ESP_OK;
+}
+
+// Helper: apply the ColorCapabilities fix to a specific endpoint and enable
+// Hue/Saturation feature. Must be called after the endpoint is created.
+static void configure_color_endpoint(endpoint_t *ep, uint16_t endpoint_id)
+{
+    // ── Step 1: Create CurrentHue / CurrentSaturation attributes ─────────────
+    //
+    // extended_color_light::create() only adds XY attributes by default (the
+    // Matter spec makes XY mandatory and HS optional for ExtendedColorLight).
+    // hue_saturation::add() creates CurrentHue + CurrentSaturation + HS commands.
+    //
+    // Known issue: update_feature_map() inside hue_saturation::add() fails with
+    // "Feature map attribute cannot be null" due to an ODR violation in the
+    // esp-matter SDK (legacy esp_matter_feature.cpp and generated color_control.cpp
+    // both export the same symbol; the legacy version can't find the FeatureMap
+    // attribute created by the generated extended_color_light path).
+    // The attribute creation succeeds anyway — only the FeatureMap update fails.
+    // We fix the FeatureMap manually in step 3 below.
+    {
+        cluster_t *color_ctrl = esp_matter::cluster::get(ep, ColorControl::Id);
+        esp_matter::cluster::color_control::feature::hue_saturation::config_t hs_cfg;
+        hs_cfg.current_hue        = DEFAULT_HUE;
+        hs_cfg.current_saturation = DEFAULT_SATURATION;
+        esp_matter::cluster::color_control::feature::hue_saturation::add(color_ctrl, &hs_cfg);
+    }
+
+    // ── Step 2: Force ColorCapabilities = HS(bit0) + XY(bit3) = 0x0009 ──────
+    //
+    // ColorCapabilities tells controllers which colour modes this endpoint
+    // supports.  The ODR bug may write 0 here (wrong struct offset), so we
+    // set it explicitly after endpoint creation.
+    {
+        attribute_t *cc_attr = attribute::get(endpoint_id, ColorControl::Id,
+                                              ColorControl::Attributes::ColorCapabilities::Id);
+        if (cc_attr) {
+            esp_matter_attr_val_t v = esp_matter_bitmap16(0x0009);
+            attribute::set_val(cc_attr, &v);
+            ESP_LOGI(TAG, "ep %d ColorCapabilities = 0x0009", endpoint_id);
+        } else {
+            ESP_LOGE(TAG, "ep %d: ColorCapabilities attribute not found!", endpoint_id);
+        }
+    }
+
+    // ── Step 3: Force FeatureMap on ColorControl to include HS + XY ──────────
+    //
+    // Apple Home reads the ColorControl FeatureMap (attribute 0xFFFC) to decide
+    // which colour-picker UI to show.  Without the HueSaturation bit set in the
+    // FeatureMap, Apple Home ignores ColorCapabilities and shows only a colour-
+    // temperature slider, even if ColorCapabilities says 0x0009.
+    //
+    // Because update_feature_map() failed in step 1, we OR in the bits here:
+    //   bit 0 = HueSaturation  (0x0001)
+    //   bit 3 = XY             (0x0008)
+    //   combined               (0x0009)
+    //
+    // 0xFFFC = chip::app::Clusters::Globals::Attributes::FeatureMap::Id
+    {
+        attribute_t *fm_attr = attribute::get(endpoint_id, ColorControl::Id, 0xFFFC);
+        if (fm_attr) {
+            esp_matter_attr_val_t fm_val = esp_matter_invalid(NULL);
+            attribute::get_val(fm_attr, &fm_val);
+            uint32_t new_fm = fm_val.val.u32 | 0x0009u;   // OR in HS(bit0) + XY(bit3)
+            esp_matter_attr_val_t v = esp_matter_bitmap32(new_fm);
+            attribute::set_val(fm_attr, &v);
+            ESP_LOGI(TAG, "ep %d ColorControl FeatureMap = 0x%08X", endpoint_id, (unsigned)new_fm);
+        } else {
+            ESP_LOGE(TAG, "ep %d: ColorControl FeatureMap not found!", endpoint_id);
+        }
+    }
 }
 
 extern "C" void app_main(void)
@@ -88,73 +162,66 @@ extern "C" void app_main(void)
     node_t *node = node::create(&node_config, app_attribute_update_cb, app_identification_cb);
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
-    // Extended colour light: supports On/Off, Level, Hue/Sat, XY
-    extended_color_light::config_t light_config;
-    light_config.on_off.on_off                                    = DEFAULT_POWER;
-    light_config.on_off_lighting.start_up_on_off                  = nullptr;
-    light_config.level_control.current_level                      = DEFAULT_BRIGHTNESS;
-    light_config.level_control.on_level                           = DEFAULT_BRIGHTNESS;
-    light_config.level_control_lighting.start_up_current_level    = DEFAULT_BRIGHTNESS;
-    light_config.color_control.color_mode          = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
-    light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
-    // Advertise HS (bit 0) + XY (bit 3) — controls the color wheel in Apple Home.
-    // feature::add() only updates FeatureMap, not this attribute.
-    light_config.color_control.color_capabilities  = 0x0009;
+    // -----------------------------------------------------------------------
+    // Create one Extended Colour Light endpoint per LED zone (0–9).
+    // Apple Home will show 10 separate light tiles, each independently
+    // controllable for power, brightness, hue, saturation, and colour temp.
+    // -----------------------------------------------------------------------
+    for (int zone = 0; zone < NUM_LIGHT_ZONES; zone++) {
 
-    endpoint_t *endpoint = extended_color_light::create(node, &light_config,
-                                                   ENDPOINT_FLAG_NONE, light_handle);
-    ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create light endpoint"));
+        extended_color_light::config_t light_config;
+        light_config.on_off.on_off                                    = DEFAULT_POWER;
+        light_config.on_off_lighting.start_up_on_off                  = nullptr;
+        light_config.level_control.current_level                      = DEFAULT_BRIGHTNESS;
+        light_config.level_control.on_level                           = DEFAULT_BRIGHTNESS;
+        light_config.level_control_lighting.start_up_current_level    = DEFAULT_BRIGHTNESS;
+        light_config.color_control.color_mode          = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
+        light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
+        // Advertise HS (bit 0) + XY (bit 3) — controls the colour wheel in Apple Home.
+        light_config.color_control.color_capabilities  = 0x0009;
 
-    light_endpoint_id = endpoint::get_id(endpoint);
-    ESP_LOGI(TAG, "Light endpoint id: %d", light_endpoint_id);
+        endpoint_t *ep = extended_color_light::create(node, &light_config,
+                                                      ENDPOINT_FLAG_NONE, light_handle);
+        ABORT_APP_ON_FAILURE(ep != nullptr,
+                             ESP_LOGE(TAG, "Failed to create endpoint for zone %d", zone));
 
-    // Hue/Saturation is optional in the spec and not added by extended_color_light::create().
-    // Adding it here is the correct fix per esp-matter Issue #963.
-    {
-        cluster_t *color_ctrl = esp_matter::cluster::get(endpoint, ColorControl::Id);
-        esp_matter::cluster::color_control::feature::hue_saturation::config_t hs_cfg;
-        hs_cfg.current_hue        = DEFAULT_HUE;
-        hs_cfg.current_saturation = DEFAULT_SATURATION;
-        esp_matter::cluster::color_control::feature::hue_saturation::add(color_ctrl, &hs_cfg);
-    }
+        uint16_t ep_id = endpoint::get_id(ep);
+        light_endpoint_ids[zone] = ep_id;
 
-    // Force ColorCapabilities = HS(bit0) + XY(bit3) = 0x0009.
-    // The config field assignment in app_main is silently lost when the linker picks the
-    // legacy color_control::create() over the generated one (ODR violation); the two
-    // config_t structs have color_capabilities at different byte offsets, so the legacy
-    // code reads 0 from a primary_x field. Setting it directly on the attribute object
-    // after endpoint creation is the only reliable way to guarantee the correct value.
-    {
-        attribute_t *cc_attr = attribute::get(light_endpoint_id, ColorControl::Id,
-                                              ColorControl::Attributes::ColorCapabilities::Id);
-        if (cc_attr) {
-            esp_matter_attr_val_t v = esp_matter_bitmap16(0x0009);
-            attribute::set_val(cc_attr, &v);
-            esp_matter_attr_val_t chk = esp_matter_invalid(NULL);
-            attribute::get_val(cc_attr, &chk);
-            ESP_LOGI(TAG, "ColorCapabilities = 0x%04X (expect 0x0009)", chk.val.u16);
-        } else {
-            ESP_LOGE(TAG, "ColorCapabilities attribute not found!");
+        // Register zone ↔ endpoint mapping in the driver before setup calls below.
+        app_driver_register_endpoint((uint8_t)zone, ep_id);
+
+        // Apply colour feature fix for this endpoint.
+        configure_color_endpoint(ep, ep_id);
+
+        // Mark rapidly-changing colour/brightness attributes for deferred NVS
+        // persistence to reduce flash wear.
+        // Guard each call: set_deferred_persistence logs an error if the
+        // attribute is NULL (e.g. CurrentX/CurrentY not created in HS-only mode).
+        {
+            auto defer_if_exists = [&](uint32_t cluster_id, uint32_t attr_id) {
+                attribute_t *a = attribute::get(ep_id, cluster_id, attr_id);
+                if (a) attribute::set_deferred_persistence(a);
+            };
+            defer_if_exists(LevelControl::Id,  LevelControl::Attributes::CurrentLevel::Id);
+            defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentHue::Id);
+            defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentSaturation::Id);
+            defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentX::Id);
+            defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentY::Id);
+            defer_if_exists(ColorControl::Id,  ColorControl::Attributes::ColorTemperatureMireds::Id);
         }
+
+        ESP_LOGI(TAG, "Zone %d → endpoint id %d", zone, ep_id);
     }
 
-    // Mark rapidly-changing attributes for deferred NVS persistence to reduce flash wear
-    attribute::set_deferred_persistence(
-        attribute::get(light_endpoint_id, LevelControl::Id, LevelControl::Attributes::CurrentLevel::Id));
-    attribute::set_deferred_persistence(
-        attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentX::Id));
-    attribute::set_deferred_persistence(
-        attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentY::Id));
-    attribute::set_deferred_persistence(
-        attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentHue::Id));
-    attribute::set_deferred_persistence(
-        attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentSaturation::Id));
-
+    // Start the Matter stack.
     esp_err_t err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter: %d", err));
 
-    // Restore last colour/brightness from NVS and push to hardware
-    app_driver_light_set_defaults(light_endpoint_id);
+    // Restore last colour/brightness from NVS and push to hardware for all zones.
+    for (int zone = 0; zone < NUM_LIGHT_ZONES; zone++) {
+        app_driver_light_set_defaults(light_endpoint_ids[zone]);
+    }
 
 #if CONFIG_ENABLE_CHIP_SHELL
     esp_matter::console::diagnostics_register_commands();
