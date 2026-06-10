@@ -1,0 +1,42 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/error.png</file>
+        <file>icons/off.png</file>
+        <file>icons/on.png</file>
+        <file>icons/settings.png</file>
+        <file>icons/Lightpack.png</file>
+        <file>icons/profile_delete.png</file>
+        <file>icons/profile_reset.png</file>
+        <file>icons/profile_new.png</file>
+        <file>icons/profiles.png</file>
+        <file>icons/about.png</file>
+        <file>icons/lock.png</file>
+        <file>translations/ru_RU.qm</file>
+        <file>translations/uk_UA.qm</file>
+        <file>icons/res_dark.png</file>
+        <file>icons/res_light.png</file>
+        <file>buttons/arrow_right_dark_24px.png</file>
+        <file>buttons/arrow_right_dark_24px_hover.png</file>
+        <file>buttons/arrow_right_dark_24px_pressed.png</file>
+        <file>buttons/arrow_right_light_24px.png</file>
+        <file>buttons/arrow_right_light_24px_hover.png</file>
+        <file>buttons/arrow_right_light_24px_pressed.png</file>
+        <file>icons/uac-shield.png</file>
+        <file>icons/arrow_up.png</file>
+        <file>icons/arrow_down.png</file>
+        <file>icons/modes.png</file>
+        <file>icons/device.png</file>
+        <file>icons/profiles2.png</file>
+        <file>icons/plugins.png</file>
+        <file>icons/nerd2.png</file>
+        <file>icons/refresh.png</file>
+        <file>icons/donate.png</file>
+        <file>icons/help.png</file>
+        <file>icons/arrow_down_gray.png</file>
+        <file>icons/arrow_up_gray.png</file>
+        <file>icons/console_gray.png</file>
+        <file>icons/Prismatik.png</file>
+        <file>icons/Prismatik-pixmap.png</file>
+        <file>text/cast.html</file>
+    </qresource>
+</RCC>

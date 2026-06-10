@@ -13,7 +13,7 @@
 #define STANDARD_SATURATION  100   // percent  (0–100)
 
 // Power-on defaults
-#define DEFAULT_POWER        true
+#define DEFAULT_POWER        false
 #define DEFAULT_BRIGHTNESS   64    // ~25 % of Matter range
 #define DEFAULT_HUE          0
 #define DEFAULT_SATURATION   254   // fully saturated

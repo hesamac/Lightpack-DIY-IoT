@@ -1,5 +1,9 @@
+#include <cstdio>
+#include <cstring>
+
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_wifi.h>
 #include <nvs_flash.h>
 
 #include <esp_matter.h>
@@ -103,34 +107,36 @@ static void configure_color_endpoint(endpoint_t *ep, uint16_t endpoint_id)
         esp_matter::cluster::color_control::feature::hue_saturation::add(color_ctrl, &hs_cfg);
     }
 
-    // ── Step 2: Force ColorCapabilities = HS(bit0) + XY(bit3) = 0x0009 ──────
+    // ── Step 2: Force ColorCapabilities = HS(bit0) + XY(bit3) + CT(bit4) ────
     //
     // ColorCapabilities tells controllers which colour modes this endpoint
-    // supports.  The ODR bug may write 0 here (wrong struct offset), so we
-    // set it explicitly after endpoint creation.
+    // supports.  The endpoint really has all three feature attribute sets:
+    // XY + CT come from extended_color_light::create(), HS from step 1 above.
+    // Advertising fewer modes than the attributes present (the old 0x0009)
+    // is out of spec for Extended Color Light (CT is mandatory) and confused
+    // Apple Home's colour readback — it rendered the stale default
+    // ColorTemperatureMireds (250 mireds ≈ 4000 K) as a light-blue tint.
     {
         attribute_t *cc_attr = attribute::get(endpoint_id, ColorControl::Id,
                                               ColorControl::Attributes::ColorCapabilities::Id);
         if (cc_attr) {
-            esp_matter_attr_val_t v = esp_matter_bitmap16(0x0009);
+            esp_matter_attr_val_t v = esp_matter_bitmap16(0x0019);
             attribute::set_val(cc_attr, &v);
-            ESP_LOGI(TAG, "ep %d ColorCapabilities = 0x0009", endpoint_id);
+            ESP_LOGI(TAG, "ep %d ColorCapabilities = 0x0019", endpoint_id);
         } else {
             ESP_LOGE(TAG, "ep %d: ColorCapabilities attribute not found!", endpoint_id);
         }
     }
 
-    // ── Step 3: Force FeatureMap on ColorControl to include HS + XY ──────────
+    // ── Step 3: Force FeatureMap on ColorControl to HS + XY + CT ─────────────
     //
     // Apple Home reads the ColorControl FeatureMap (attribute 0xFFFC) to decide
-    // which colour-picker UI to show.  Without the HueSaturation bit set in the
-    // FeatureMap, Apple Home ignores ColorCapabilities and shows only a colour-
-    // temperature slider, even if ColorCapabilities says 0x0009.
-    //
-    // Because update_feature_map() failed in step 1, we OR in the bits here:
-    //   bit 0 = HueSaturation  (0x0001)
-    //   bit 3 = XY             (0x0008)
-    //   combined               (0x0009)
+    // which colour-picker UI to show.  Must stay consistent with
+    // ColorCapabilities above.
+    //   bit 0 = HueSaturation    (0x0001)
+    //   bit 3 = XY               (0x0008)
+    //   bit 4 = ColorTemperature (0x0010)
+    //   combined                 (0x0019)
     //
     // 0xFFFC = chip::app::Clusters::Globals::Attributes::FeatureMap::Id
     {
@@ -138,7 +144,7 @@ static void configure_color_endpoint(endpoint_t *ep, uint16_t endpoint_id)
         if (fm_attr) {
             esp_matter_attr_val_t fm_val = esp_matter_invalid(NULL);
             attribute::get_val(fm_attr, &fm_val);
-            uint32_t new_fm = fm_val.val.u32 | 0x0009u;   // OR in HS(bit0) + XY(bit3)
+            uint32_t new_fm = fm_val.val.u32 | 0x0019u;   // HS(bit0) + XY(bit3) + CT(bit4)
             esp_matter_attr_val_t v = esp_matter_bitmap32(new_fm);
             attribute::set_val(fm_attr, &v);
             ESP_LOGI(TAG, "ep %d ColorControl FeatureMap = 0x%08X", endpoint_id, (unsigned)new_fm);
@@ -146,11 +152,64 @@ static void configure_color_endpoint(endpoint_t *ep, uint16_t endpoint_id)
             ESP_LOGE(TAG, "ep %d: ColorControl FeatureMap not found!", endpoint_id);
         }
     }
+
+    // ── Step 4: OnLevel + StartUpCurrentLevel = null ─────────────────────────
+    //
+    // A non-null OnLevel forces CurrentLevel to that value on EVERY OnOff
+    // toggle-on (spec) — with the old OnLevel=64 each toggle snapped the zone
+    // back to 25 % brightness.  Null = return to the previous brightness.
+    // Likewise StartUpCurrentLevel null = restore last brightness at power-up.
+    {
+        attribute_t *ol_attr = attribute::get(endpoint_id, LevelControl::Id,
+                                              LevelControl::Attributes::OnLevel::Id);
+        if (ol_attr) {
+            esp_matter_attr_val_t v = esp_matter_nullable_uint8(nullable<uint8_t>());
+            attribute::set_val(ol_attr, &v);
+        }
+        attribute_t *sl_attr = attribute::get(endpoint_id, LevelControl::Id,
+                                              LevelControl::Attributes::StartUpCurrentLevel::Id);
+        if (sl_attr) {
+            esp_matter_attr_val_t v = esp_matter_nullable_uint8(nullable<uint8_t>());
+            attribute::set_val(sl_attr, &v);
+        }
+    }
+
+    // ── Step 5: StartUpColorTemperatureMireds = null ─────────────────────────
+    //
+    // A non-null StartUpColorTemperatureMireds (the esp-matter default is 0,
+    // which counts as non-null) forces ColorMode = ColorTemperature at every
+    // power-up per the Matter spec.  The device then always booted as
+    // "4000 K cool white": Apple Home primed its cache with that state and
+    // rendered the slider light blue until the second colour change.
+    // Null = restore the previous colour mode from NVS at boot instead.
+    {
+        attribute_t *su_attr = attribute::get(endpoint_id, ColorControl::Id,
+                                              ColorControl::Attributes::StartUpColorTemperatureMireds::Id);
+        if (su_attr) {
+            esp_matter_attr_val_t v = esp_matter_nullable_uint16(nullable<uint16_t>());
+            attribute::set_val(su_attr, &v);
+            ESP_LOGI(TAG, "ep %d StartUpColorTemperatureMireds = null", endpoint_id);
+        }
+    }
 }
 
 extern "C" void app_main(void)
 {
     nvs_flash_init();
+
+    // Silence the CHIP stack's per-message INFO logging.  The Matter thread
+    // logs kilobytes per command over the 115200-baud UART, blocking itself
+    // for hundreds of ms — Apple Home shows that delay as a loading spinner
+    // while it waits for the subscription report.  Errors/warnings still show;
+    // our own app_driver/app_main logs stay at INFO.
+    esp_log_level_set("chip[EM]",  ESP_LOG_WARN);
+    esp_log_level_set("chip[IM]",  ESP_LOG_WARN);
+    esp_log_level_set("chip[DMG]", ESP_LOG_WARN);
+    esp_log_level_set("chip[ZCL]", ESP_LOG_WARN);
+    esp_log_level_set("chip[DL]",  ESP_LOG_WARN);
+    esp_log_level_set("chip[SC]",  ESP_LOG_WARN);
+    esp_log_level_set("ROUTE_HOOK", ESP_LOG_WARN);
+    esp_log_level_set("NimBLE",    ESP_LOG_WARN);
 
     app_driver_handle_t light_handle  = app_driver_light_init();
     app_driver_handle_t button_handle = app_driver_button_init();
@@ -163,27 +222,59 @@ extern "C" void app_main(void)
     ABORT_APP_ON_FAILURE(node != nullptr, ESP_LOGE(TAG, "Failed to create Matter node"));
 
     // -----------------------------------------------------------------------
-    // Create one Extended Colour Light endpoint per LED zone (0–9).
-    // Apple Home will show 10 separate light tiles, each independently
-    // controllable for power, brightness, hue, saturation, and colour temp.
+    // Bridge topology:
+    //   EP1            = Aggregator (the "bridge" itself)
+    //   EP2 … EP11     = bridged Extended Colour Lights, one per LED zone.
+    //
+    // Presenting the zones as *bridged* devices (instead of bare endpoints on
+    // one node) makes Apple Home treat each zone as a full standalone
+    // accessory: its own tile with tap-to-toggle, its own room and name, and
+    // independent use in scenes/automations.
     // -----------------------------------------------------------------------
+    endpoint::aggregator::config_t aggregator_config;
+    endpoint_t *aggregator_ep = endpoint::aggregator::create(node, &aggregator_config,
+                                                             ENDPOINT_FLAG_NONE, NULL);
+    ABORT_APP_ON_FAILURE(aggregator_ep != nullptr,
+                         ESP_LOGE(TAG, "Failed to create aggregator endpoint"));
+
     for (int zone = 0; zone < NUM_LIGHT_ZONES; zone++) {
 
+        // Bridged-node endpoint: Descriptor + Bridged Device Basic Information.
+        endpoint::bridged_node::config_t bridged_config;
+        endpoint_t *ep = endpoint::bridged_node::create(node, &bridged_config,
+                                                        ENDPOINT_FLAG_BRIDGE, light_handle);
+        ABORT_APP_ON_FAILURE(ep != nullptr,
+                             ESP_LOGE(TAG, "Failed to create bridged endpoint for zone %d", zone));
+        endpoint::set_parent_endpoint(ep, aggregator_ep);
+
+        // Per-zone name shown in Apple Home (NodeLabel of the BDBI cluster).
+        {
+            char zone_name[16];
+            snprintf(zone_name, sizeof(zone_name), "Zone %d", zone + 1);
+            cluster_t *bdbi = cluster::get(ep, BridgedDeviceBasicInformation::Id);
+            if (bdbi) {
+                cluster::bridged_device_basic_information::attribute::create_node_label(
+                    bdbi, zone_name, strlen(zone_name));
+            }
+        }
+
+        // Add the Extended Colour Light device type + clusters to this endpoint.
         extended_color_light::config_t light_config;
         light_config.on_off.on_off                                    = DEFAULT_POWER;
         light_config.on_off_lighting.start_up_on_off                  = nullptr;
         light_config.level_control.current_level                      = DEFAULT_BRIGHTNESS;
-        light_config.level_control.on_level                           = DEFAULT_BRIGHTNESS;
-        light_config.level_control_lighting.start_up_current_level    = DEFAULT_BRIGHTNESS;
-        light_config.color_control.color_mode          = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
-        light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
+        light_config.level_control.on_level                           = nullable<uint8_t>();
+        light_config.level_control_lighting.start_up_current_level    = nullable<uint8_t>();
+        // Default to XY mode: Apple Home renders the colour slider only from
+        // XY or CT — a zone left in HS mode shows a generic light-blue fill.
+        light_config.color_control.color_mode          = (uint8_t)ColorControl::ColorMode::kCurrentXAndCurrentY;
+        light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentXAndCurrentY;
         // Advertise HS (bit 0) + XY (bit 3) — controls the colour wheel in Apple Home.
         light_config.color_control.color_capabilities  = 0x0009;
 
-        endpoint_t *ep = extended_color_light::create(node, &light_config,
-                                                      ENDPOINT_FLAG_NONE, light_handle);
-        ABORT_APP_ON_FAILURE(ep != nullptr,
-                             ESP_LOGE(TAG, "Failed to create endpoint for zone %d", zone));
+        esp_err_t light_err = extended_color_light::add(ep, &light_config);
+        ABORT_APP_ON_FAILURE(light_err == ESP_OK,
+                             ESP_LOGE(TAG, "Failed to add light device type for zone %d", zone));
 
         uint16_t ep_id = endpoint::get_id(ep);
         light_endpoint_ids[zone] = ep_id;
@@ -205,6 +296,7 @@ extern "C" void app_main(void)
             };
             defer_if_exists(LevelControl::Id,  LevelControl::Attributes::CurrentLevel::Id);
             defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentHue::Id);
+            defer_if_exists(ColorControl::Id,  ColorControl::Attributes::EnhancedCurrentHue::Id);
             defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentSaturation::Id);
             defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentX::Id);
             defer_if_exists(ColorControl::Id,  ColorControl::Attributes::CurrentY::Id);
@@ -217,6 +309,12 @@ extern "C" void app_main(void)
     // Start the Matter stack.
     esp_err_t err = esp_matter::start(app_event_cb);
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter: %d", err));
+
+    // Disable Wi-Fi modem power save.  The default (WIFI_PS_MIN_MODEM) adds
+    // 100–300 ms latency to every inbound packet, which Apple Home shows as a
+    // loading spinner after each command.  This device is mains-powered, so
+    // the extra ~60 mA idle draw is irrelevant; responsiveness matters more.
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     // Restore last colour/brightness from NVS and push to hardware for all zones.
     for (int zone = 0; zone < NUM_LIGHT_ZONES; zone++) {

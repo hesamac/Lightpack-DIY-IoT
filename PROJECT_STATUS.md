@@ -189,12 +189,31 @@ firmware/
 
 | Connection | Status |
 |------------|--------|
-| ESP32-C6 GPIO6 → DM631 DCK | ⬜ Not yet wired |
-| ESP32-C6 GPIO7 → DM631 DAI | ⬜ Not yet wired |
-| ESP32-C6 GPIO14 → DM631 LAT | ⬜ Not yet wired |
-| ESP32-C6 GND → Lightpack GND | ⬜ Not yet wired |
+| ESP32-C6 GPIO7 → Lightpack DATA pad (right edge / J1) | ⬜ Not yet wired |
+| ESP32-C6 GPIO6 → Lightpack CLK pad (right edge / J1) | ⬜ Not yet wired |
+| ESP32-C6 GPIO14 → Lightpack LATCH pad (right edge / J1) | ⬜ Not yet wired |
+| ESP32-C6 GND → Lightpack GND pad (right edge / J1) | ⬜ Not yet wired |
 | 5 V external supply → Lightpack LED rail | ⬜ Not yet connected |
 | AT90USB162 removed / bypassed | ⬜ Pending |
+
+### Preferred solder points — NEXT_BOARD connector (J1), right edge of PCB
+
+The Lightpack board has five dedicated labeled pads on its right edge (the J1
+"NEXT_BOARD" daisy-chain connector). These are the easiest and most reliable
+connection points — no need to solder directly to IC2's SOP24 pins.
+
+```
+Lightpack right edge          ESP32-C6 DevKitM-1
+────────────────────          ──────────────────
+DATA  pad  ──────────────────► J1 Pin 12 (GPIO7)
+CLK   pad  ──────────────────► J1 Pin 11 (GPIO6)
+LATCH pad  ──────────────────► J1 Pin 13 (GPIO14)
+GND   pad  ──────────────────► GND
+VCC   pad  — leave unconnected (ESP32-C6 has its own 3.3 V supply)
+```
+
+> **Note:** The DATA pad on J1 connects to the same `DATA1` net as IC2 Pin 2.
+> Soldering to either point is electrically identical; J1 is far easier.
 
 ---
 
@@ -222,16 +241,23 @@ Using the Lightpack 6.0L schematic (Eagle CAD files in the Lightpack GitHub repo
 
 Use short, direct wires (< 15 cm preferred for signal integrity at 1 MHz).
 
+Solder to the **J1 "NEXT_BOARD" pads on the right edge** of the Lightpack PCB
+(five labeled pads: VCC, GND, DATA, CLK, LATCH):
+
 ```
-ESP32-C6 DevKitM-1          Lightpack board
-──────────────────          ──────────────────────────────
-J1 Pin 11 (GPIO6)  ──────►  DM631 DCK  (SCK on AT90USB162 footprint)
-J1 Pin 12 (GPIO7)  ──────►  DM631 DAI  (MOSI on AT90USB162 footprint)
-J1 Pin 13 (GPIO14) ──────►  DM631 LAT  (LATCH on AT90USB162 footprint)
-GND                ──────►  GND
+ESP32-C6 DevKitM-1          Lightpack board (J1 right-edge pads)
+──────────────────          ──────────────────────────────────────
+J1 Pin 12 (GPIO7)  ──────►  DATA  pad
+J1 Pin 11 (GPIO6)  ──────►  CLK   pad
+J1 Pin 13 (GPIO14) ──────►  LATCH pad
+GND                ──────►  GND   pad
+                             VCC   pad — leave unconnected
 ```
 
 No level shifter needed — both sides are 3.3 V logic.
+
+> **Alternative:** DATA can also be soldered directly to IC2 Pin 2 (DAI) on
+> the DM631 chip — same net, but the J1 edge pad is far easier to work with.
 
 ### Step 4 — Power
 

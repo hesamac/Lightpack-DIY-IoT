@@ -1,0 +1,322 @@
+    _/        _/            _/          _/                                    _/      
+   _/              _/_/_/  _/_/_/    _/_/_/_/  _/_/_/      _/_/_/    _/_/_/  _/  _/   
+  _/        _/  _/    _/  _/    _/    _/      _/    _/  _/    _/  _/        _/_/      
+ _/        _/  _/    _/  _/    _/    _/      _/    _/  _/    _/  _/        _/  _/     
+_/_/_/_/  _/    _/_/_/  _/    _/      _/_/  _/_/_/      _/_/_/    _/_/_/  _/    _/    
+                   _/                      _/                                         
+              _/_/                        _/                                          
+
+                        lightpack.googlecode.com
+
+===================================================================================
+#    Software changelog
+===================================================================================
+
+Version 5.11.0
+---------------
+May 13, 2014
+
+* Ubuntu 14 support
+* Fixed plugin's icon searchpath
+* Fixed zones order mess
+* Remove unnecessary monitor configuration page
+* One more optimization
+* Improved Russian translation
+* Minimize wakeups in ConstantColor/Mood mode
+* Minimize wakeups in inactive mode
+* Add plugin status to plugins list
+* Updates notification is introduced
+* Workaround for "no systray found" problem (issue 362)
+* Thanks to backers in About tab
+* Fixed the issue that leds stay on when OS shutdowns (windows only)
+* Remove icon from OS X's dock
+
+Version 5.10.6
+---------------
+February 18, 2014
+
+* Disable LEDs first on ZonePlacementPage.
+* Maximize default LEDs count in configuratin wizard.
+* Disable AppNap, introduced in OS X 10.9
+
+Version 5.10.5
+---------------
+February 5, 2014
+
+* Temporarly removed xxxEachWidget grabbers
+* Widgets scaling on screen resize
+* Fix multiple screens on Mac
+* Signing OS X, build
+* Fixing LED remapping (3-5 LEDs were tossed)
+* Make Prismatik compileable with MSVS
+* Fix ApiServer.{hpp,cpp} method signature
+* Fix resource handling in WinAPIGrabber class
+* Added 'Run wizard' button
+* Get rid of LD_LIBRARY_PATH
+* Fix potential memory leak in LibraryInjector
+* Minor fixes
+
+Version 5.10.4
+---------------
+December 10, 2013
+
+* Disable ApiAuth by default (please set it after installation if you really need it)
+* Fixing Adalight
+* Speed optimization under Mac OS X
+* Several minor bugs
+
+Version 5.10.3
+---------------
+November 27, 2013
+
+* SysTrayIcon implementation for Unity added
+* Fixed pinging of Lightpacks
+* Crash on device disconnection is fixed
+* Several minor fixes
+
+Version 5.10.1
+---------------
+November 9, 2013
+
+* Settings wizard
+* Support for multiple connected Lightpacks
+* Identification of multiple Lightpacks by serial numbers
+* New plugin support system
+* Hotkeys temporary unavailable
+* Device settings moved to wizard
+* Migrated to Qt5
+
+Version 5.9.6
+---------------
+April 8, 2013
+
+* Fixed issue #317, Last used profile isn't saved
+* Fixed flickering with Adalight devices
+
+Version 5.9.5
+---------------
+April 5, 2013
+
+* Fixed issue #314, Prismatik doesn't work with Adalight. 
+* Fixed wrong grabber after loading
+* Fixed wrong leds count after Prismatik is started
+* Fixed crash when deleting profiles
+* Fixed build process of PythonQt
+
+Version 5.9.4
+---------------
+April 1, 2013
+
+* Average color behind luminosity threshold
+* Fix wrong lightpack mode selection after loading
+* Fix threshold mode selection
+* Fix sidebar inaccessibility after retranslation
+* Other fixes
+
+Versoin sw5.9.3
+---------------
+March 12, 2013
+
+* MacOS X support
+* Fixed hotkeys in MacOS
+* D3D9 hooks
+* XBMC plugin 1.0.6
+* Minor bugfixes
+
+Version sw5.9.1
+---------------
+November 22, 2012
+
+* Brand new UI
+* Brand new name
+* Added embedded Python plugins
+* Extended plugins interface
+* Grabbing in DirectX 10/11 applications
+* New option "Color sequence" for SPI-based devices
+* Up to 255 grab-zones
+* HSL to HSV
+* Scene luminosity level option group
+* Improved hotkeys
+* Many minor fixes and improvements
+
+Version sw5.8.6
+---------------
+January 21, 2012
+
+* Updated design of the grabbing areas
+* New widgets for configure grabbing areas
+* Hotkey for ON / OFF lights
+* Run only one instance of software
+* Fixed work with other USB HID on Mac OS X
+* New API command "?" for list all available commands
+* Each run in a separate log file
+* Many small fixes GUI
+
+Version sw5.8.0
+---------------
+December 28, 2011
+
+* API refactoring
+* Added new commands in API for authorization and help
+* Fixed Mac OS X grabber
+* Adalight and Ardulight devices support
+* Implemented multithreading
+* Added brightness control
+* Turn off lights when exiting application via tray menu
+
+Version sw5.5.0
+---------------
+August 11, 2011
+
+* New hardware with 10 LEDs
+* New algorithm for smoothly change colors
+* Native grabber for X-Window System (Linux)
+* Moodlamp with liquid mode
+* Gamma correction
+* AlienFX support
+* XBMC Plugin
+* API
+
+Version sw4.1.0
+---------------
+brunql, March 23, 2011
+
+* Grab using WinAPI (grab from screen where placed first widget)
+* Added profiles
+* New icons and application image
+* Portable version: store logs and configs in current directory
+* About dialog rewrited: added mercurial revision and links to project on googlecode.com
+* Added information about the version and manufacturer in the description of the executable file
+* Added runtime GUI translation
+* Scale grab widgets on resize screen where placed first widget
+* Fix cursor behavior on MoveMeWidget
+* Added debug level option to main config file
+
+Version sw4.0.9
+---------------
+brunql, February 19, 2011
+
+* Using HIDAPI (https://github.com/signal11/hidapi) for cross-platform HID;
+* Added new class MoveMeWidget for determine parts of desktop for each LEDs;
+* Save size and position of each MoveMeWidget to ini-settigs file;
+* Added checkbox for On/Off AVG colors;
+* Added option for set minimum level of sensitivity;
+* Added icons to tray menu
+* Rename project to Lightpack
+* Fixbug with recreation logs file if size > 1 Mb;
+
+Version sw4.0.0
+---------------
+brunql, January 13, 2011
+
+* See hardware changes for details (hw4.0)
+
+Version sw3.0.3
+---------------
+brunql, December 11, 2010
+
+* Fully support 8 LEDs by software
+* Added logs tab to settings window
+* Added indexes to GrabDesktopWindowLeds labels
+* Bugfix with first tab in settings window
+* Bugfix with finding center of the screen in GrabDesktopWindowLeds (primary screen height and desktop height are differs)
+* Updated "About" dialog: hardware ATmega8 + 8 LEDs
+* Updated "About" dialog: added license GPLv3 with link on www.gnu.org/licenses/gpl-3.0.html 
+
+Version sw3.0.2
+---------------
+brunql, December 11, 2010
+
+* Read and write USB data buffers expanded to 0x20 bytes
+* Rewrite function updateColors() for 8 LEDs
+* Added CMD_NOP to over functions which sends info to device 
+* Intermediate version before fully support 8 LEDs
+
+Version sw3.0.1
+---------------
+brunql, December 8, 2010
+
+* Bugfix with multiply monitors (wrong determine width of screen, using full desktop->width() but need only available witdh of the primary screen) 
+* Right now AmbiligthUSB can be using only with primary screen
+
+Version sw3.0.0
+---------------
+brunql, December 7, 2010
+
+* Split firmware and hardware versions
+* Added option to "Hardware options" for switch on/off "USB send data only if colors changes"
+* In "Hardware options" added option to set smootly delay
+* 
+
+Version sw2.7.7 (release)
+---------------
+brunql, November 12, 2010
+
+* License GPLv3
+* Bugfix: timer options and colors depth didn't sync with device; 
+* Bugfix: if unplug and plug device, it didn't reopen; now, then screen picture changed, device will be reopened;
+* Move changelogs form README.md to different files
+* Using markdown for CHANGELOGs and INSTALL files
+* Rename: AmbilightUSB_Hardware to Firmware; AmbilightUSB_PC to Software; 
+
+Version sw2.7.6
+---------------
+brunql, November 03, 2010
+
+* Windows support
+* Added radio buttons switch colored or white fill of grabbing rects
+* Added new hardware option to set color depth
+* Split code of getting and sending colors in 2 classes
+* Make one *.pro file for windows and linux
+
+Version sw2.7.5
+---------------
+brunql, October 25, 2010
+
+Update GUI:
+
+* All settings now in 2 tabs (software and hardware settings)
+* Added new settings 'white balance' (red, green and blue coefs)
+* Added new settings 'timer prescaler' (1, 8, 64, 256, 1024) and 'timer OCR' (Output Compare Register) settings
+* Eval PWM generation frequency and show it in hardware settings
+
+Timer settings for controlling the PWM frequency
+
+Version sw2.7.4
+---------------
+brunql, October 24, 2010
+
+Rewrote the code to grab screen image and find the average color value of exciting fields
+Added display of exciting fields as filled rectangles in different colors
+Added scroll bars to change the width and height of the exciting fields
+
+Version sw2.7.3
+---------------
+brunql, September 18, 2010
+
+Sets configurations of:
+
+* delay between updates
+* count of pixels (by setting size and steps)
+* show/hide transparent/black background of catching pixels
+
+Shows FPS   
+Added logging to `${HOME}/.ambilight.log`   
+Added saving configurations in `${HOME}/.config/brunql.dev/AmbilightUSB.ini`   
+Start to writing this version log  
+
+
+Version sw2.*
+-------------
+brunql, Summer, 2010
+
+Start to writing Qt based GUI version of PC software.  
+After starting the app is minimized to tray.  
+
+
+Version sw1.*
+-------------
+brunql, Spring, 2010
+
+Console version of PC software  
+Using X11 library to catch pixels colors  
