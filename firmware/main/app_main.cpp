@@ -265,10 +265,10 @@ extern "C" void app_main(void)
         light_config.level_control.current_level                      = DEFAULT_BRIGHTNESS;
         light_config.level_control.on_level                           = nullable<uint8_t>();
         light_config.level_control_lighting.start_up_current_level    = nullable<uint8_t>();
-        // Default to XY mode: Apple Home renders the colour slider only from
-        // XY or CT — a zone left in HS mode shows a generic light-blue fill.
-        light_config.color_control.color_mode          = (uint8_t)ColorControl::ColorMode::kCurrentXAndCurrentY;
-        light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentXAndCurrentY;
+        // Default to HueSaturation mode — Apple Home controls colour with
+        // MoveToHueAndSaturation, so HS is the native representation.
+        light_config.color_control.color_mode          = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
+        light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
         // Advertise HS (bit 0) + XY (bit 3) — controls the colour wheel in Apple Home.
         light_config.color_control.color_capabilities  = 0x0009;
 
