@@ -20,6 +20,6 @@ typedef struct {
 } dm631_color_t;
 
 esp_err_t dm631_init(void);
-void      dm631_set_zone(uint8_t zone, dm631_color_t color);  // zone 0–9
+void      dm631_set_zone(uint8_t led, dm631_color_t color);  // LED socket 0–9 (LED 1 = 0)
 void      dm631_set_all(dm631_color_t color);
 esp_err_t dm631_update(void);   // send frame then pulse LAT

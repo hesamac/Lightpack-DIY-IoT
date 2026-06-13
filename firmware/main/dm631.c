@@ -19,6 +19,19 @@ static const char *TAG = "dm631";
 static dm631_color_t s_zones[DM631_NUM_ZONES];
 static uint16_t s_vals[FRAME_VALUES];
 
+// Which physical DM631 zone (slot in s_zones, clocked out by build_frame) each
+// LED socket is wired to.  Index = LED socket, 0-based (LED 1 = index 0).
+// HomeKit "LED N" → this table → the zone that drives box socket N.
+//
+// Measured on this board 2026-06-12: the near DM631 (IC2, LEDs 1–5) is wired in
+// a scrambled order; the far DM631 (IC3, LEDs 6–10) is already sequential.
+//   LED 1 → Zone 4     LED 6  → Zone 5
+//   LED 2 → Zone 3     LED 7  → Zone 6
+//   LED 3 → Zone 0     LED 8  → Zone 7
+//   LED 4 → Zone 1     LED 9  → Zone 8
+//   LED 5 → Zone 2     LED 10 → Zone 9
+static const uint8_t led_to_zone[DM631_NUM_ZONES] = {4, 3, 0, 1, 2, 5, 6, 7, 8, 9};
+
 static void build_frame(void)
 {
     int v = 0;
@@ -67,10 +80,10 @@ esp_err_t dm631_init(void)
     return ESP_OK;
 }
 
-void dm631_set_zone(uint8_t zone, dm631_color_t color)
+void dm631_set_zone(uint8_t led, dm631_color_t color)
 {
-    if (zone < DM631_NUM_ZONES) {
-        s_zones[zone] = color;
+    if (led < DM631_NUM_ZONES) {
+        s_zones[led_to_zone[led]] = color;   // map LED socket → physical DM631 zone
     }
 }
 

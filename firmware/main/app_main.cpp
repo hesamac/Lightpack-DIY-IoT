@@ -250,7 +250,7 @@ extern "C" void app_main(void)
         // Per-zone name shown in Apple Home (NodeLabel of the BDBI cluster).
         {
             char zone_name[16];
-            snprintf(zone_name, sizeof(zone_name), "Zone %d", zone + 1);
+            snprintf(zone_name, sizeof(zone_name), "LED %d", zone + 1);
             cluster_t *bdbi = cluster::get(ep, BridgedDeviceBasicInformation::Id);
             if (bdbi) {
                 cluster::bridged_device_basic_information::attribute::create_node_label(
