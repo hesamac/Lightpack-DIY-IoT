@@ -247,14 +247,24 @@ extern "C" void app_main(void)
                              ESP_LOGE(TAG, "Failed to create bridged endpoint for zone %d", zone));
         endpoint::set_parent_endpoint(ep, aggregator_ep);
 
-        // Per-zone name shown in Apple Home (NodeLabel of the BDBI cluster).
+        // Per-tile identity shown in Apple Home (Bridged Device Basic Information).
+        //   NodeLabel    → tile name ("LED N")
+        //   VendorName   → Hersteller (Manufacturer)
+        //   ProductName  → Modell (Model)
+        //   SerialNumber → Seriennummer
         {
             char zone_name[16];
             snprintf(zone_name, sizeof(zone_name), "LED %d", zone + 1);
+            char vendor[] = "Hesam DIY & Lightpack";
+            char model[]  = "Lightpack IOT";
+            char serial[] = "20202021";
             cluster_t *bdbi = cluster::get(ep, BridgedDeviceBasicInformation::Id);
             if (bdbi) {
-                cluster::bridged_device_basic_information::attribute::create_node_label(
-                    bdbi, zone_name, strlen(zone_name));
+                namespace bdbi_attr = esp_matter::cluster::bridged_device_basic_information::attribute;
+                bdbi_attr::create_node_label(bdbi, zone_name, strlen(zone_name));
+                bdbi_attr::create_vendor_name(bdbi, vendor, strlen(vendor));
+                bdbi_attr::create_product_name(bdbi, model, strlen(model));
+                bdbi_attr::create_serial_number(bdbi, serial, strlen(serial));
             }
         }
 
