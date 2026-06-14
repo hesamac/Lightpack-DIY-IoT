@@ -22,3 +22,7 @@ lightpack-esp32c6-matter-build-chat.md
 # Upstream Lightpack sources — reference only, not bundled (see README)
 Lightpack-master/
 at90usb162-firmware/
+
+# Original Lightpack hardware design (reference only — see README)
+Lightpack.sch
+Lightpack.brd

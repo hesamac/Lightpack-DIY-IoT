@@ -206,6 +206,15 @@ comments.
 
 ---
 
+## License
+
+This project's own code (the ESP32-C6 firmware in `firmware/`) is released under
+the **MIT License** — see [`LICENSE`](LICENSE). Third-party components (ESP-IDF,
+esp-matter, etc.) retain their own licenses, and the original Lightpack sources
+are not included here (see **Credits & upstream** above).
+
+---
+
 ## References
 
 - [Lightpack original firmware](https://github.com/woodenshark/Lightpack)
