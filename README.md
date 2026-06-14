@@ -190,6 +190,37 @@ See [`docs/`](docs/) for the detailed dev logs.
 
 ---
 
+## Safety
+
+This is a do-it-yourself project that modifies the electronics of a powered
+device. **Build and use it at your own risk.**
+
+- **Power rails:** the LED rail runs at **12 V** (barrel jack); the board logic +
+  ESP32 run at **5 V** (board USB). Don't cross-wire the rails, and never feed
+  12 V into the ESP32 or its GPIOs.
+- **Common ground:** all supplies (12 V, 5 V, ESP32) must share a ground.
+- **LED current** flows through the DM631 drivers and the 12 V rail — *not*
+  through the ESP32. Size the 12 V supply for your LEDs.
+- **Heat:** the electronics sit inside the original enclosure; ensure adequate
+  cooling. There is **no firmware thermal protection** (that feature was removed).
+- This is a hobby project, **not a certified or commercial product**.
+
+---
+
+## Disclaimer
+
+This is an independent, non-commercial DIY project. It is **not affiliated with,
+endorsed by, or certified by** the original Lightpack project / woodenshark,
+Apple, the Connectivity Standards Alliance (Matter), Espressif, WLED, or HyperHDR.
+All trademarks belong to their respective owners.
+
+The firmware uses Matter **test** vendor/product IDs and is **not** a certified
+Matter or "Works with Apple Home" product — references to "Apple Home" and
+"Matter" describe local compatibility only. The software is provided "as is",
+without warranty of any kind (see [`LICENSE`](LICENSE)).
+
+---
+
 ## Credits & upstream
 
 This project builds on the original **Lightpack** by woodenshark / Atarity — the
