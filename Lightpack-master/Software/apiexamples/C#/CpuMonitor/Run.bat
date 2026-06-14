@@ -1,1 +1,0 @@
-start CpuMonitor.exe 2.15 100

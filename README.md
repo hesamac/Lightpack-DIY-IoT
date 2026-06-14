@@ -190,6 +190,22 @@ See [`docs/`](docs/) for the detailed dev logs.
 
 ---
 
+## Credits & upstream
+
+This project builds on the original **Lightpack** by woodenshark / Atarity — the
+ambient-light hardware, the original AVR firmware, and its documentation. Those
+upstream sources are **GPL/CC licensed and are not bundled in this repository**;
+get them from the original project:
+
+- Original Lightpack: <https://github.com/Atarity/Lightpack>
+- Original firmware: <https://github.com/woodenshark/Lightpack>
+
+This repo contains **only the new ESP32-C6 firmware**. The DM631 driver is a
+clean re-implementation; the original `LedDriver.c` is credited in the source
+comments.
+
+---
+
 ## References
 
 - [Lightpack original firmware](https://github.com/woodenshark/Lightpack)
