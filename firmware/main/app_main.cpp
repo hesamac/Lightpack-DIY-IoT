@@ -107,44 +107,40 @@ static void configure_color_endpoint(endpoint_t *ep, uint16_t endpoint_id)
         esp_matter::cluster::color_control::feature::hue_saturation::add(color_ctrl, &hs_cfg);
     }
 
-    // ── Step 2: Force ColorCapabilities = HS(bit0) + XY(bit3) + CT(bit4) ────
+    // ── Step 2: ColorCapabilities = HS(bit0) + XY(bit3) = 0x0009 ─────────────
     //
-    // ColorCapabilities tells controllers which colour modes this endpoint
-    // supports.  The endpoint really has all three feature attribute sets:
-    // XY + CT come from extended_color_light::create(), HS from step 1 above.
-    // Advertising fewer modes than the attributes present (the old 0x0009)
-    // is out of spec for Extended Color Light (CT is mandatory) and confused
-    // Apple Home's colour readback — it rendered the stale default
-    // ColorTemperatureMireds (250 mireds ≈ 4000 K) as a light-blue tint.
+    // EXPERIMENT (2026-06-14): drop ColorTemperature (bit4). HomeKit is widely
+    // reported to mishandle lights that expose CT alongside HS/XY — it renders
+    // the colour swatch as a default white/blue on a fresh read. Advertising
+    // HS + XY only may make Apple treat it as a pure colour light and show the
+    // real colour. (Revert with: git checkout firmware/main/app_main.cpp)
     {
         attribute_t *cc_attr = attribute::get(endpoint_id, ColorControl::Id,
                                               ColorControl::Attributes::ColorCapabilities::Id);
         if (cc_attr) {
-            esp_matter_attr_val_t v = esp_matter_bitmap16(0x0019);
+            esp_matter_attr_val_t v = esp_matter_bitmap16(0x0009);
             attribute::set_val(cc_attr, &v);
-            ESP_LOGI(TAG, "ep %d ColorCapabilities = 0x0019", endpoint_id);
+            ESP_LOGI(TAG, "ep %d ColorCapabilities = 0x0009", endpoint_id);
         } else {
             ESP_LOGE(TAG, "ep %d: ColorCapabilities attribute not found!", endpoint_id);
         }
     }
 
-    // ── Step 3: Force FeatureMap on ColorControl to HS + XY + CT ─────────────
+    // ── Step 3: FeatureMap on ColorControl = HS + XY (CT bit cleared) ────────
     //
-    // Apple Home reads the ColorControl FeatureMap (attribute 0xFFFC) to decide
-    // which colour-picker UI to show.  Must stay consistent with
-    // ColorCapabilities above.
     //   bit 0 = HueSaturation    (0x0001)
     //   bit 3 = XY               (0x0008)
-    //   bit 4 = ColorTemperature (0x0010)
-    //   combined                 (0x0019)
+    //   bit 4 = ColorTemperature (0x0010)  ← cleared for this experiment
     //
+    // extended_color_light::create() sets XY+CT, so we OR in HS and explicitly
+    // clear the CT bit to land on 0x0009.
     // 0xFFFC = chip::app::Clusters::Globals::Attributes::FeatureMap::Id
     {
         attribute_t *fm_attr = attribute::get(endpoint_id, ColorControl::Id, 0xFFFC);
         if (fm_attr) {
             esp_matter_attr_val_t fm_val = esp_matter_invalid(NULL);
             attribute::get_val(fm_attr, &fm_val);
-            uint32_t new_fm = fm_val.val.u32 | 0x0019u;   // HS(bit0) + XY(bit3) + CT(bit4)
+            uint32_t new_fm = (fm_val.val.u32 | 0x0009u) & ~0x0010u;   // HS+XY, clear CT
             esp_matter_attr_val_t v = esp_matter_bitmap32(new_fm);
             attribute::set_val(fm_attr, &v);
             ESP_LOGI(TAG, "ep %d ColorControl FeatureMap = 0x%08X", endpoint_id, (unsigned)new_fm);
