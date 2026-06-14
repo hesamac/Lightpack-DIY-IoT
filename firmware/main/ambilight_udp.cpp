@@ -11,13 +11,20 @@
 
 static const char *TAG = "ambilight";
 
-#define AMBILIGHT_UDP_PORT  21324    // WLED realtime UDP port
-#define RECV_TIMEOUT_MS     500      // wake periodically to run output_tick()
-#define RECV_BUF_SIZE       512      // 10 LEDs needs ~34 bytes; generous headroom
+// Two protocols are accepted so different desktop tools work out of the box:
+//   - WLED realtime (port 21324): DRGB / DNRGB. Used by WLED-native tools and
+//     the simple broadcast test. HyperHDR's "WLED" device ALSO needs an HTTP
+//     handshake we don't implement, so for HyperHDR use DDP instead.
+//   - DDP (port 4048): Distributed Display Protocol. HyperHDR's "DDP" device
+//     streams straight here with no handshake — the recommended path.
+#define WLED_PORT        21324
+#define DDP_PORT         4048
+#define RECV_TIMEOUT_MS  500       // wake periodically to run output_tick()
+#define RECV_BUF_SIZE    512       // 10 LEDs needs < 50 bytes; generous headroom
 
-// WLED realtime protocol selector (first byte):
-#define WLED_DRGB           2        // [2][timeout][R,G,B ...]            from LED 0
-#define WLED_DNRGB          4        // [4][timeout][startHi][startLo][R,G,B ...]
+// WLED realtime selector (first byte)
+#define WLED_DRGB        2         // [2][timeout][R,G,B ...]            from LED 0
+#define WLED_DNRGB       4         // [4][timeout][startHi][startLo][RGB ...]
 
 // 8-bit sRGB -> 12-bit DM631 with gamma 2.2, matching the Home colour path so a
 // given colour looks the same whether it comes from Apple Home or Ambilight.
@@ -28,77 +35,102 @@ static inline uint16_t gamma8_to_12(uint8_t v)
     return (uint16_t)(f * 4095.0f);
 }
 
+// Copy `n` RGB triples from `p` into `frame`, starting at zone `start`.
+static bool fill_frame(const uint8_t *p, int n, int start, dm631_color_t frame[])
+{
+    bool any = false;
+    for (int i = 0; i < n; i++) {
+        int zone = start + i;
+        if (zone < 0 || zone >= DM631_NUM_ZONES) continue;
+        frame[zone].r = gamma8_to_12(p[i * 3 + 0]);
+        frame[zone].g = gamma8_to_12(p[i * 3 + 1]);
+        frame[zone].b = gamma8_to_12(p[i * 3 + 2]);
+        any = true;
+    }
+    return any;
+}
+
+// WLED realtime DRGB (proto 2) / DNRGB (proto 4). Returns true if frame updated.
+static bool parse_wled(const uint8_t *buf, int len, dm631_color_t frame[])
+{
+    if (len < 2) return false;
+    int offset, start;
+    switch (buf[0]) {
+    case WLED_DRGB:  offset = 2; start = 0; break;
+    case WLED_DNRGB: if (len < 4) return false; offset = 4; start = (buf[2] << 8) | buf[3]; break;
+    default:         return false;   // unsupported — ignore safely
+    }
+    return fill_frame(&buf[offset], (len - offset) / 3, start, frame);
+}
+
+// DDP (Distributed Display Protocol). Returns true if frame updated.
+static bool parse_ddp(const uint8_t *buf, int len, dm631_color_t frame[])
+{
+    if (len < 10) return false;
+    if ((buf[0] & 0xC0) != 0x40) return false;            // not DDP v1
+    int header = (buf[0] & 0x10) ? 14 : 10;               // timecode present?
+    if (len < header) return false;
+    uint32_t data_off = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16) |
+                        ((uint32_t)buf[6] << 8)  |  (uint32_t)buf[7];
+    return fill_frame(&buf[header], (len - header) / 3, (int)(data_off / 3), frame);
+}
+
+static int make_udp_socket(uint16_t port)
+{
+    int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) return -1;
+    struct sockaddr_in a = {};
+    a.sin_family      = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    a.sin_port        = htons(port);
+    if (bind(s, (struct sockaddr *)&a, sizeof(a)) < 0) {
+        ESP_LOGE(TAG, "bind() failed on port %d", port);
+        close(s);
+        return -1;
+    }
+    return s;
+}
+
 static void ambilight_task(void *arg)
 {
     static uint8_t buf[RECV_BUF_SIZE];
-    // Persists across packets so partial DNRGB updates accumulate.
-    dm631_color_t frame[DM631_NUM_ZONES] = {};
+    dm631_color_t  frame[DM631_NUM_ZONES] = {};   // persists so partial updates accumulate
 
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "socket() failed");
+    int wled = make_udp_socket(WLED_PORT);
+    int ddp  = make_udp_socket(DDP_PORT);
+    if (wled < 0 && ddp < 0) {
+        ESP_LOGE(TAG, "no sockets — ambilight disabled");
         vTaskDelete(NULL);
         return;
     }
-
-    struct sockaddr_in addr = {};
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port        = htons(AMBILIGHT_UDP_PORT);
-    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        ESP_LOGE(TAG, "bind() failed on port %d", AMBILIGHT_UDP_PORT);
-        close(sock);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    struct timeval tv = { .tv_sec = 0, .tv_usec = RECV_TIMEOUT_MS * 1000 };
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    ESP_LOGI(TAG, "listening on UDP %d (WLED DRGB/DNRGB)", AMBILIGHT_UDP_PORT);
+    int maxfd = (wled > ddp ? wled : ddp) + 1;
+    ESP_LOGI(TAG, "listening — WLED udp/%d, DDP udp/%d", WLED_PORT, DDP_PORT);
 
     while (1) {
-        int len = recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL);
-        if (len < 0) {
-            // Receive timeout: no frame this window — let the output layer
-            // revert to Home mode if Ambilight has gone idle.
-            output_tick();
-            continue;
-        }
-        if (len < 2) {
-            continue;   // runt packet
-        }
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        if (wled >= 0) FD_SET(wled, &rfds);
+        if (ddp  >= 0) FD_SET(ddp,  &rfds);
+        struct timeval tv = { .tv_sec = 0, .tv_usec = RECV_TIMEOUT_MS * 1000 };
 
-        int offset, start;
-        switch (buf[0]) {
-        case WLED_DRGB:
-            offset = 2; start = 0;
-            break;
-        case WLED_DNRGB:
-            if (len < 4) continue;
-            offset = 4; start = (buf[1 + 1] << 8) | buf[1 + 2];   // buf[2..3]
-            break;
-        default:
-            continue;   // unsupported protocol — ignore safely
-        }
-
-        int n = (len - offset) / 3;   // RGB triples in this packet
-        if (n <= 0) {
+        int r = select(maxfd, &rfds, NULL, NULL, &tv);
+        if (r <= 0) {
+            output_tick();   // no frame this window — revert to Home if idle
             continue;
         }
 
-        for (int i = 0; i < n; i++) {
-            int zone = start + i;
-            if (zone < 0 || zone >= DM631_NUM_ZONES) {
-                continue;   // ignore LEDs outside our 10 zones
-            }
-            const uint8_t *p = &buf[offset + i * 3];
-            frame[zone].r = gamma8_to_12(p[0]);
-            frame[zone].g = gamma8_to_12(p[1]);
-            frame[zone].b = gamma8_to_12(p[2]);
+        bool updated = false;
+        if (wled >= 0 && FD_ISSET(wled, &rfds)) {
+            int len = recvfrom(wled, buf, sizeof(buf), 0, NULL, NULL);
+            if (len > 0 && parse_wled(buf, len, frame)) updated = true;
         }
-
-        output_set_ambilight_frame(frame);
+        if (ddp >= 0 && FD_ISSET(ddp, &rfds)) {
+            int len = recvfrom(ddp, buf, sizeof(buf), 0, NULL, NULL);
+            if (len > 0 && parse_ddp(buf, len, frame)) updated = true;
+        }
+        if (updated) {
+            output_set_ambilight_frame(frame);
+        }
     }
 }
 
