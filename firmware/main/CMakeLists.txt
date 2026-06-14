@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS             "app_main.cpp" "app_driver.cpp" "dm631.c"
+    SRCS             "app_main.cpp" "app_driver.cpp" "dm631.c" "output_controller.cpp" "ambilight_udp.cpp"
     INCLUDE_DIRS     "."
     PRIV_INCLUDE_DIRS "." "${ESP_MATTER_PATH}/examples/common/utils"
 )

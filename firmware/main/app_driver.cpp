@@ -5,6 +5,8 @@
 #include <app_priv.h>
 #include <common_macros.h>
 
+#include "output_controller.h"
+
 extern "C" {
 #include "dm631.h"
 }
@@ -146,8 +148,10 @@ static void apply_zone_to_leds(uint8_t zone)
 
     ESP_LOGI(TAG, "zone %d → DM631 R=%u G=%u B=%u", zone, color.r, color.g, color.b);
 
-    dm631_set_zone(zone, color);
-    dm631_update();   // sends the full 384-bit frame for all zones atomically
+    // Hand the computed colour to the output layer (it owns all DM631 writes and
+    // decides Home vs Ambilight). In Home mode this drives the LEDs immediately;
+    // in Ambilight mode it's stored and restored when Ambilight ends.
+    output_set_home_zone(zone, color);
 }
 
 // Re-read the full ColorControl state for one zone from the Matter data model
@@ -300,6 +304,7 @@ app_driver_handle_t app_driver_light_init(void)
     }
 
     dm631_init();
+    output_controller_init();
     return (app_driver_handle_t)(uintptr_t)1;   // non-null sentinel; dm631 is a singleton
 }
 

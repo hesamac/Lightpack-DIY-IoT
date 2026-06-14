@@ -12,6 +12,7 @@
 #include <common_macros.h>
 #include <app_priv.h>
 #include <app_reset.h>
+#include "ambilight_udp.h"
 
 #include <app/server/CommissioningWindowManager.h>
 #include <app/server/Server.h>
@@ -326,6 +327,11 @@ extern "C" void app_main(void)
     for (int zone = 0; zone < NUM_LIGHT_ZONES; zone++) {
         app_driver_light_set_defaults(light_endpoint_ids[zone]);
     }
+
+    // Start the Wi-Fi UDP ambilight receiver (WLED protocol, port 21324).
+    // Lives in its own task; Home/Ambilight mode switching is handled by the
+    // output controller. Does not affect Matter/Apple Home control.
+    ambilight_udp_init();
 
 #if CONFIG_ENABLE_CHIP_SHELL
     esp_matter::console::diagnostics_register_commands();
