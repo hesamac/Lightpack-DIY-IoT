@@ -1,174 +1,185 @@
-# Lightpack DIY — ESP32-C6 + Matter/HomeKit
+# Lightpack DIY — ESP32-C6 · Matter/HomeKit · Ambilight
 
-> Replace the original Lightpack USB microcontroller (AT90USB162) with an ESP32-C6, driving the existing DM631 LED drivers over SPI and exposing the device to Apple HomeKit via the Matter protocol.
+> Replace the dead original Lightpack microcontroller (AT90USB162) with an
+> **ESP32-C6**, driving the existing **DM631** LED drivers, and expose the device
+> to **Apple Home (Matter)** *and* **screen-sync Ambilight** — on one chip, no
+> extra hardware, no PC required for normal use.
+
+**Status: working end-to-end.** ✅ 10 RGB zones controllable from Apple Home/Siri,
+**and** live screen Ambilight via HyperHDR.
 
 ---
 
-## What This Project Does
+## What it does
 
-The [Lightpack](https://github.com/Atarity/Lightpack) is an open-source ambient lighting device originally controlled via USB by the Prismatik software. This project replaces the USB MCU entirely, turning the Lightpack into a standalone **Matter/HomeKit smart light** — no PC required.
+The [Lightpack](https://github.com/Atarity/Lightpack) is an open-source ambient
+backlight, originally a USB device driven by the (now-dead-on-macOS) Prismatik
+app. This project rips out the USB MCU and turns the board into:
 
-- Control all 10 RGB LED zones from **Apple Home** and **Siri**
-- Full colour support: Hue/Saturation, Brightness, Colour Temperature, CIE XY
-- OTA firmware updates supported
-- NVS persistence for light state across reboots
+- A **Matter / Apple Home** smart light — **10 independent RGB zones**, each its
+  own tile with tap-to-toggle, color, and brightness; controllable by Siri.
+- A **wireless Ambilight** — a desktop tool (**HyperHDR**) streams screen-edge
+  colors over Wi-Fi and the LEDs follow the screen in real time.
+
+Both run in the same firmware and switch automatically: Ambilight takes over
+while it's streaming, and the device returns to its Apple Home state ~2 s after
+streaming stops.
 
 ---
 
 ## Hardware
 
-### Required
-
 | Part | Notes |
 |------|-------|
-| Lightpack board (revision 6.x) | Original PCB with DM631 LED drivers |
-| ESP32-C6-DevKitM-1 | ESP32-C6FH4, 4 MB flash, 3.3 V I/O |
-| MP1584EN buck converter | Steps down Lightpack 5 V rail → 5 V for ESP32 |
+| Lightpack board (rev 6.x) | Original PCB with two SiTI **DM631** LED drivers (10 zones) |
+| ESP32-C6-DevKitM-1 | RISC-V, Wi-Fi 6 + BLE, 4 MB flash, 3.3 V I/O |
+| 12 V supply | Powers the LED rail via the barrel jack |
+| 5 V source (USB charger or MP1584 buck) | Powers the board **logic** + the ESP32 |
 
-### Lightpack Board ICs
+### Wiring — ESP32-C6 → Lightpack (3 signals + ground)
 
-| IC | Part | Zones |
-|----|------|-------|
-| IC2 | SiTI DM631 | Zones 5–9 |
-| IC3 | SiTI DM631 | Zones 0–4 |
+| Signal | ESP32-C6 | Lightpack tap point |
+|--------|----------|---------------------|
+| CLK    | GPIO6  | IC1 pin 15 / DM631 DCK |
+| DATA   | GPIO7  | IC1 pin 16 / DM631 DAI |
+| LATCH  | GPIO14 | IC1 pin 14 / DM631 /LAT |
+| GND    | GND    | common ground (mandatory) |
 
-The AT90USB162 is **not removed** — it is simply isolated by leaving the USB1 (micro-USB) port unplugged. Without 5 V on USB1, the AVR never powers on.
+> Only these three signals + GND go to the board. **Do not** connect the ESP32's
+> 3.3 V/5 V pins to the Lightpack.
+
+### Power — the key gotcha
+
+The DM631 **logic** (VDD, ~5 V) is fed only from the board's **USB connector**,
+*not* from the barrel jack (the jack/diode D2 feeds the LED rail only). So:
+
+```
+12 V barrel jack ──► LED anode rail (isolated by D2)
+5 V (charger / MP1584) ──► board USB port ──► DM631 logic VDD (REQUIRED)
+                       └──► ESP32-C6 power
+GND ───────────────────── shared by all three
+```
+
+If the board's USB 5 V is missing, the DM631s have no logic power and the LEDs
+output garbage. (3.3 V from the ESP works in practice despite the DM631's 5 V
+logic-high spec; if you ever see flicker, a 74AHCT125 buffer or a 4.5 V logic
+rail fixes the margin.)
+
+### Retiring the AT90USB162 (IC1)
+
+IC1 is disabled by **grounding its RESET pin** (all its I/O go high-impedance, so
+it can't fight the ESP on the shared bus). Optionally cut IC1 pins 14/15/16 to
+remove it from the bus entirely.
 
 ---
 
-## Wiring
+## DM631 driver
 
-### ESP32-C6 → Lightpack
+- 3-wire bit-bang (CLK/DATA/LATCH), no chip-select, MSB-first.
+- 12 bits per channel (0–4095). Two DM631s daisy-chained, 32×12 bits per frame.
+- **Channel order per zone: B → G → R** (matches the original woodenshark firmware).
+- A small **`led_to_zone[]`** table maps logical zones to the socket numbers
+  printed on the enclosure (the near chip is wired in a scrambled order).
 
-| Signal | ESP32-C6 GPIO | Connection point |
-|--------|--------------|-----------------|
-| DATA | GPIO7 | IC2 Pin 2 (DAI) — soldered directly |
-| CLK | GPIO6 | J2 expansion connector CLK pin |
-| LATCH | GPIO14 | J2 expansion connector LATCH pin |
-| GND | GND | MP1584 output GND (common ground) |
-| 5 V in | — | MP1584 output → ESP32 5 V pin |
-
-### Power
-
-```
-Lightpack barrel jack (5 V)
-    ├── LED rail (Lightpack board)
-    └── MP1584EN IN+
-            └── MP1584EN OUT+ (5.0 V set) → ESP32-C6 5 V pin
-```
-
-> ⚠️ Never connect USB-C and the MP1584 output simultaneously.
-
-### IC2 → IC3 Bridge (required for all 10 zones)
-
-The PCB traces for CLK and LATCH between the two DM631 chips are broken. Solder two short jumper wires:
-
-```
-IC2 Pin 3  ──►  IC3 Pin 3   (CLK)
-IC2 Pin 4  ──►  IC3 Pin 4   (LATCH)
-```
-
-Without this bridge only zones 5–9 (IC2 side) respond.
+> If only ~5 zones respond, the CLK/LATCH link between the two DM631s may need a
+> jumper.
 
 ---
 
-## DM631 Protocol
+## Matter / Apple Home
 
-- **Interface:** 3-wire (CLK, DATA, LATCH), no chip-select
-- **SPI mode:** Mode 0, MSB first, 1 MHz
-- **Bits per channel:** 12 (0 = off, 4095 = full brightness)
-- **Channel order per LED:** B → G → R (blue clocked in first)
-- **Frame size:** 48 bytes (384 bits) for both ICs in chain
-- **Driver:** GPIO bit-bang (hardware SPI/DMA causes byte-order corruption with 12-bit packing)
+- **Topology:** a Matter **bridge** — one Aggregator + **10 bridged Extended
+  Color Lights** ("LED 1"…"LED 10"), so each zone is a first-class HomeKit
+  accessory (own tile, tap-to-toggle, room, scenes).
+- **Color:** HueSaturation-native (Apple drives color via `MoveToHueAndSaturation`).
+  Advertises **HS + XY only** (`0x09`) — **Color Temperature is deliberately
+  dropped** to dodge a HomeKit bug that paints the swatch a default light-blue
+  for lights exposing CT+HS together.
+- **Commissioning:** BLE. **Pairing code: `20202021`.**
+- Gamma 2.2, per-zone NVS persistence, device identity (manufacturer/model/serial).
 
 ---
 
-## Firmware
+## Ambilight (screen sync)
 
-### Toolchain
+- A Wi-Fi UDP receiver listens on **two** protocols:
+  - **DDP** (port **4048**) — recommended; what **HyperHDR**'s "DDP" device uses.
+  - **WLED** realtime (port **21324**, DRGB/DNRGB) — for WLED-native tools + testing.
+- Auto Home↔Ambilight switching with a 2 s idle revert that restores the Apple
+  Home colors.
 
-| Tool | Version |
-|------|---------|
-| ESP-IDF | v5.3.0 |
-| esp-matter | latest main |
-| RISC-V GCC | 13.2.0 |
+### HyperHDR setup (macOS)
 
-### Setup
+1. Install **HyperHDR** (`…-macOS-arm64.dmg` for Apple Silicon) from its
+   [GitHub releases](https://github.com/awawa-dev/HyperHDR/releases). First launch:
+   right-click → Open; grant **Screen Recording** permission.
+2. **LED Layout** → *Classic*, edge counts summing to **10**.
+3. **LED Controller** → type **DDP**, host = ESP32 IP, port **4048**, order **RGB**.
+4. Enable the macOS screen grabber. If dim, raise HyperHDR brightness/gamma.
+
+Quick firmware-only test (no HyperHDR) — WLED broadcast "all red":
+```bash
+python3 -c "
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+pkt = bytes([2,2]) + bytes([255,0,0])*10
+for _ in range(50):
+    s.sendto(pkt, ('255.255.255.255', 21324)); time.sleep(0.1)
+"
+```
+
+---
+
+## Build & flash
 
 ```bash
-# Activate toolchain (new terminal)
+# Each new terminal:
 source ~/esp/esp-idf/export.sh
-source ~/esp/esp-matter/export.sh
+source ~/esp/esp-matter/export.sh    # needed for builds (sets ESP_MATTER_PATH)
 
-# Build
-cd ~/Documents/Project/Lightpack\ DIY/firmware/
-idf.py set-target esp32c6
-idf.py build
-
-# Flash
-idf.py -p /dev/cu.usbserial-110 flash monitor
+cd firmware
+idf.py set-target esp32c6            # first time only
+idf.py -p /dev/cu.usbserial-XXX build flash monitor
 ```
 
-### Project Structure
+- Run `idf.py` from `firmware/` (the repo-root `CMakeLists.txt` is a junk
+  placeholder). The serial port name varies with the USB socket — check
+  `ls /dev/cu.*`. If "port busy": `lsof -t /dev/cu.usbserial-XXX | xargs kill`.
+
+### Firmware layout (`firmware/main/`)
 
 ```
-firmware/
-├── CMakeLists.txt
-├── partitions.csv
-├── sdkconfig.defaults
-├── sdkconfig.defaults.esp32c6
-└── main/
-    ├── dm631.h / dm631.c       # DM631 GPIO bit-bang driver
-    ├── app_priv.h              # shared types and defaults
-    ├── app_driver.cpp          # Matter ↔ DM631 bridge (colour math)
-    └── app_main.cpp            # Matter node, endpoint, event loop
+dm631.{c,h}              DM631 bit-bang driver + zone→socket remap
+app_priv.h               shared types / defaults
+app_driver.cpp           Matter color math → output layer
+app_main.cpp             Matter node, bridge endpoints, Wi-Fi, startup
+output_controller.{cpp,h}  single LED output layer: Home/Ambilight mode + mutex
+ambilight_udp.{cpp,h}    Wi-Fi UDP receiver (WLED 21324 + DDP 4048)
 ```
-
-### Matter Device
-
-- **Device type:** Extended Color Light
-- **Colour modes:** On/Off, Brightness, Hue/Saturation, Colour Temperature, CIE XY
-- **Commissioning:** BLE (no WiFi required for pairing)
-- **`ColorCapabilities`:** manually set to `0x0009` (bits 0 + 3) to work around an ODR issue in the esp-matter SDK
 
 ---
 
-## Current Status
+## Status
 
 | Item | Status |
 |------|--------|
-| Hardware wired | ✅ |
-| AT90USB162 isolated | ✅ |
-| Firmware builds | ✅ |
-| 4 zones (IC2) working from HomeKit | ✅ |
-| 6 zones (IC3) | ⬜ Needs IC2→IC3 CLK/LAT bridge |
-| Colour wheel in Apple Home | ⬜ Under investigation |
-| BLE re-advertising after fabric removal | ⬜ Under investigation |
+| Hardware bring-up (10 zones, correct colors) | ✅ |
+| Apple Home: 10 zones, color/brightness, per-tile toggle | ✅ |
+| Color slider correct (light-blue bug fixed) | ✅ |
+| Multi-light / Siri responsiveness | ✅ |
+| Device identity (manufacturer/model/serial) | ✅ |
+| Ambilight (WLED + DDP), HyperHDR verified | ✅ |
+| Chip-temperature sensor | ❌ removed — Apple Home won't render bridged Matter sensors |
 
----
-
-## Known Issues
-
-**Only 4 of 10 zones light up**
-IC3 is not receiving CLK and LATCH signals. Solder the IC2→IC3 bridge wires described above.
-
-**Apple Home shows warm/cool slider instead of colour wheel**
-`ColorCapabilities = 0x0009` is set at boot but Apple Home may cache commissioning data. Fix: full `idf.py erase-flash flash` then re-add accessory.
-
-**Device not discoverable after removing from Apple Home**
-`kFabricRemoved` fires after BLE memory is already reclaimed. Investigating whether BLE can be re-initialized on demand.
-
-**Factory reset via shell fails**
-`matter factoryreset` returns `Error: 47`. Use `idf.py erase-flash flash` instead.
+See [`docs/`](docs/) for the detailed dev logs.
 
 ---
 
 ## References
 
 - [Lightpack original firmware](https://github.com/woodenshark/Lightpack)
-- [Lightpack hardware (revision 6)](https://github.com/Atarity/Lightpack-hardware)
-- [Lightpack DIY schematic](https://github.com/Atarity/Lightpack-docs/blob/master/EN/Lightpack_DIY.md)
-- [HomeSpan library](https://github.com/HomeSpan/HomeSpan)
 - [esp-matter SDK](https://github.com/espressif/esp-matter)
-- [ESP32-C6-DevKitM-1 pinout](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32c6/esp32-c6-devkitm-1/)
+- [HyperHDR](https://github.com/awawa-dev/HyperHDR)
+- [ESP32-C6-DevKitM-1](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32c6/esp32-c6-devkitm-1/)
 - [SiTI DM631 datasheet](https://www.siti.com.tw/product/spec/LED/DM631.pdf)

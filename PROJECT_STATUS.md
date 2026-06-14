@@ -1,9 +1,48 @@
-# Lightpack DIY — ESP32-C6 + HomeKit Project Status
+# Lightpack DIY — ESP32-C6 · Matter/HomeKit · Ambilight — Project Status
 
-**Last updated:** 2026-05-25  
-**Goal:** Replace the original Lightpack USB microcontroller (AT90USB162) with an
-ESP32-C6, driving the existing DM631 LED drivers over SPI and exposing the device
-to Apple HomeKit via the Matter protocol (ESP-Matter SDK).
+**Last updated:** 2026-06-14  
+**Status:** ✅ **Complete and working** — Apple Home (10 zones) + screen Ambilight.
+**Goal:** Replace the dead Lightpack MCU (AT90USB162) with an ESP32-C6 driving the
+existing DM631 LED drivers, exposed to Apple Home via Matter, plus a Wi-Fi UDP
+Ambilight receiver for screen sync.
+
+> ⚠️ The **section below this divider reflects the current, verified state.** The
+> numbered sections further down are historical reference from the 2026-05-25
+> bring-up; a few claims there were later superseded (corrected here and inline).
+> Full history: `docs/DEVLOG-*.md`.
+
+## Current status (2026-06-14)
+
+### Working
+- **10 RGB zones** via two daisy-chained DM631 drivers; channel order
+  **B → G → R** (confirmed); logical zones remapped to the printed socket numbers
+  via `led_to_zone[]`.
+- **Apple Home bridge:** Aggregator + 10 bridged Extended Color Lights
+  ("LED 1"…"LED 10") — each a tile with tap-to-toggle, color, brightness; Siri works.
+- **Color:** HueSaturation-native; advertises **HS + XY only (`0x09`)** — Color
+  Temperature deliberately dropped to fix the HomeKit "light-blue swatch" bug.
+  Gamma 2.2, per-zone NVS persistence, device identity set. Pairing code **20202021**.
+- **Ambilight:** Wi-Fi UDP receiver — **DDP** (port **4048**, for HyperHDR) +
+  **WLED** realtime (port **21324**, DRGB/DNRGB). Auto Home↔Ambilight switching,
+  2 s idle revert that restores the Apple Home state. Verified with HyperHDR (macOS).
+
+### Hardware — corrections vs. the historical sections below
+- **Wiring:** GPIO6 = CLK, GPIO7 = DATA, GPIO14 = LATCH, GND. Three signals + ground.
+- **Power:** 12 V on the barrel jack → LED rail (isolated by D2). The DM631
+  **logic VDD (~5 V) comes from the board's USB connector and is REQUIRED** — not
+  from the jack. *(The old "leave USB unplugged to isolate the AVR" note is wrong:
+  the logic needs that USB 5 V; without it the LEDs output garbage.)* ESP32 also
+  powered from 5 V. ~3.3 V signalling works in practice.
+- **AT90USB162 (IC1)** isolated by **grounding its RESET pin** (I/O → Hi-Z).
+
+### Removed
+- **Chip-temperature sensor.** Firmware was proven correct (value read, scaled,
+  reported), but Apple Home does **not** render *bridged* Matter sensor values
+  (known Apple-side limitation — open esp-matter issues). Reverted.
+
+### Resolved since 2026-05-25 (listed as "open" in the historical sections below)
+All 10 zones working · color wheel/slider correct · multi-zone + Siri
+responsiveness · fabric/commissioning · per-tile tap-to-toggle.
 
 ---
 
