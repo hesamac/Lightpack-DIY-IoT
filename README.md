@@ -36,6 +36,10 @@ streaming stops.
 | 12 V supply | Powers the LED rail via the barrel jack |
 | 5 V source (USB charger or MP1584 buck) | Powers the board **logic** + the ESP32 |
 
+> 🧩 **Stealth retrofit:** all the added electronics (ESP32-C6 + buck converter)
+> fit **inside the original Lightpack enclosure**, so the finished unit keeps the
+> original product's look — it looks just like a stock Lightpack from the outside.
+
 ### Wiring — ESP32-C6 → Lightpack (3 signals + ground)
 
 | Signal | ESP32-C6 | Lightpack tap point |
@@ -157,6 +161,16 @@ app_main.cpp             Matter node, bridge endpoints, Wi-Fi, startup
 output_controller.{cpp,h}  single LED output layer: Home/Ambilight mode + mutex
 ambilight_udp.{cpp,h}    Wi-Fi UDP receiver (WLED 21324 + DDP 4048)
 ```
+
+### Languages & toolchain
+
+- **C++** — all Matter/application code (`app_main`, `app_driver`,
+  `output_controller`, `ambilight_udp`); the esp-matter / CHIP (connectedhomeip)
+  SDK is C++, so the app is too.
+- **C** — the `dm631` LED driver (GPIO bit-bang), called from C++ via `extern "C"`.
+- Built with **ESP-IDF** + **esp-matter**, **RISC-V GCC** toolchain, target
+  **ESP32-C6**. (The Ambilight test snippet is Python and runs on the Mac, not
+  the device.)
 
 ---
 

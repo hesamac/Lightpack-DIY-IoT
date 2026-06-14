@@ -25,6 +25,9 @@ Ambilight receiver for screen sync.
 - **Ambilight:** Wi-Fi UDP receiver — **DDP** (port **4048**, for HyperHDR) +
   **WLED** realtime (port **21324**, DRGB/DNRGB). Auto Home↔Ambilight switching,
   2 s idle revert that restores the Apple Home state. Verified with HyperHDR (macOS).
+- **Enclosure:** all added electronics (ESP32-C6 + buck converter) fit inside the
+  **original Lightpack housing** — the finished build keeps the original product's
+  appearance (stealth retrofit).
 
 ### Hardware — corrections vs. the historical sections below
 - **Wiring:** GPIO6 = CLK, GPIO7 = DATA, GPIO14 = LATCH, GND. Three signals + ground.
@@ -34,6 +37,14 @@ Ambilight receiver for screen sync.
   the logic needs that USB 5 V; without it the LEDs output garbage.)* ESP32 also
   powered from 5 V. ~3.3 V signalling works in practice.
 - **AT90USB162 (IC1)** isolated by **grounding its RESET pin** (I/O → Hi-Z).
+
+### Languages & toolchain
+- **C++** — all Matter/application code (`app_main.cpp`, `app_driver.cpp`,
+  `output_controller.cpp`, `ambilight_udp.cpp`); required by the esp-matter /
+  CHIP (connectedhomeip) C++ SDK.
+- **C** — the `dm631` LED driver (GPIO bit-bang), called from C++ via `extern "C"`.
+- Built with **ESP-IDF** + **esp-matter** using the **RISC-V GCC** toolchain,
+  target **ESP32-C6**. (The Ambilight test snippet is Python, run on the Mac.)
 
 ### Removed
 - **Chip-temperature sensor.** Firmware was proven correct (value read, scaled,
