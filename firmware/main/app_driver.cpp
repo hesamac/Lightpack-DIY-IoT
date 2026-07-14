@@ -220,6 +220,15 @@ esp_err_t app_driver_attribute_update(app_driver_handle_t driver_handle,
         }
     } else if (cluster_id == LevelControl::Id) {
         if (attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
+            // The LevelControl server dips CurrentLevel to the minimum (1) for
+            // ~50 ms during every power-on (MoveToLevelWithOnOff), then restores
+            // the real level. Instant commits hid that dip; the fade engine
+            // animates it into a visible down-up wobble on group power-on.
+            // Level 1 (0.4 %) is never a real user intent — Apple Home's 1 %
+            // slider minimum sends ~3 — so ignore the transient entirely.
+            if (val->val.u8 <= 1) {
+                return ESP_OK;
+            }
             z.brightness = REMAP_TO_RANGE(val->val.u8, MATTER_BRIGHTNESS, STANDARD_BRIGHTNESS) / 100.0f;
             ESP_LOGI(TAG, "zone %d Level=%u → bri=%.3f", zone, val->val.u8, z.brightness);
             apply_zone_to_leds((uint8_t)zone);
